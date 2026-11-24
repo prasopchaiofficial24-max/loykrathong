@@ -580,22 +580,23 @@ $('save').onclick = async e => {
 const SYNC_URL = 'https://ntfy.sh/loykrathong-q36aJkcizkjI';   // ชื่อห้องลับของเราสองคน
 const LIT_TTL = 2 * 60 * 60 * 1000;   // เทียนที่จุดไว้นานเกิน 2 ชั่วโมงถือว่าดับแล้ว
 const litTs = {a: 0, b: 0};
-let me = null, es = null;
+let me = null, es = null, together = false;   // me = ใบที่เครื่องนี้จุด ('a' ซ้าย / 'b' ขวา) เลือกจากใบแรกที่แตะ
 const sendLit = (s, t) => fetch(SYNC_URL, {method: 'POST', body: JSON.stringify({s, t})});
 const isLit = s => Date.now() - litTs[s] < LIT_TTL;
 function setHint(){
   let t = 'แตะที่เทียนเพื่อจุดไฟทั้งสองใบ';
-  if (me){
+  if (together && !me) t = 'แตะเทียนที่กระทงของตัวเอง อีกใบให้อีกคนจุดนะ';
+  else if (together){
     const mine = me === 'a' ? 'ใบของเค้า' : 'ใบของเบ้บ', other = me === 'a' ? 'เบ้บ' : 'เค้า';
     t = isLit(me) ? `จุดแล้ว! รอ${other}จุดอีกใบอยู่นะ…` : `แตะเทียน${mine} แล้วรอ${other}จุดด้วยกันนะ`;
   }
   $('hint').textContent = t;
 }
-function startTogether(side){
+function startTogether(){
   if (!window.EventSource) return;
-  me = side;
-  (me === 'a' ? kB : kA).classList.add('theirs');
+  together = true;
   setHint();
+  const seen = new Set();
   let opened = false;
   const giveUp = setTimeout(() => { if (!opened) solo('เชื่อมต่อไม่ได้ตอนนี้ จุดเองทั้งสองใบไปก่อนนะ'); }, 10000);
   const take = raw => {
@@ -608,24 +609,24 @@ function startTogether(side){
   /* อ่านสถานะย้อนหลังเงียบๆ ก่อน แล้วค่อยฟังของใหม่แบบสด */
   fetch(SYNC_URL + '/json?poll=1&since=2h').then(r => r.text()).then(txt => {
     let last = '';
-    txt.split('\n').forEach(line => { try { const ev = JSON.parse(line); if (ev.event === 'message'){ take(ev); last = ev.id; } } catch (e) {} });
+    txt.split('\n').forEach(line => { try { const ev = JSON.parse(line); if (ev.event === 'message'){ take(ev); seen.add(ev.id); last = ev.id; } } catch (e) {} });
     syncLit(true);
-    if (!me) return;
+    if (!together) return;
     es = new EventSource(SYNC_URL + '/sse' + (last ? '?since=' + encodeURIComponent(last) : ''));
     es.onopen = () => { opened = true; clearTimeout(giveUp); };
-    es.onmessage = ev => { try { if (take(JSON.parse(ev.data))) syncLit(); } catch (e) {} };
+    es.onmessage = ev => { try { const raw = JSON.parse(ev.data); if (seen.has(raw.id)) return; seen.add(raw.id); if (take(raw)) syncLit(); } catch (e) {} };
   }).catch(() => { clearTimeout(giveUp); solo('เชื่อมต่อไม่ได้ตอนนี้ จุดเองทั้งสองใบไปก่อนนะ'); });
 }
 function solo(msg){
-  if (!me) return;
-  me = null; if (es){ es.close(); es = null; }
+  if (!together) return;
+  together = false; me = null; if (es){ es.close(); es = null; }
   kA.classList.remove('theirs'); kB.classList.remove('theirs');
   setHint(); toast(msg);
 }
 const who = location.hash.replace('#', '').toLowerCase();
-if (who !== 'solo') startTogether(who === 'ka' ? 'a' : 'b');
+if (who !== 'solo') startTogether();
 function syncLit(quiet){
-  if (!me) return;
+  if (!together) return;
   ['a', 'b'].forEach(s => {
     const el = K[s].el, on = isLit(s), has = el.classList.contains('lit');
     if (step > 1) return;
@@ -654,8 +655,9 @@ function checkBoth(){
 function light(k){
   if (step !== 1 || k.el.classList.contains('lit')) return;
   const side = k === K.a ? 'a' : 'b';
-  if (me){
-    if (side !== me){ toast(me === 'a' ? 'ใบนี้ของเบ้บ ให้เบ้บจุดเองนะ' : 'ใบนี้ของเค้า รอเค้าจุดนะ'); return; }
+  if (together){
+    if (me && side !== me){ toast(me === 'a' ? 'ใบนี้ให้เบ้บจุดนะ' : 'ใบนี้ให้เค้าจุดนะ'); return; }
+    me = side; (side === 'a' ? kB : kA).classList.add('theirs');
     litTs[me] = Date.now();
     sendLit(me, litTs[me]).then(r => { if (!r.ok) throw r; }).catch(() => {
       litTs[side] = 0; if (step <= 1) k.el.classList.remove('lit'); setHint(); toast('ส่งไม่สำเร็จ ลองแตะอีกครั้งนะ');
@@ -686,7 +688,8 @@ $('again').onclick = e => {
   [kA, kB].forEach(k => { k.classList.remove('lit'); k.querySelector('label').style.opacity = ''; });
   K.a.t = K.b.t = 0; place(K.a, -1); place(K.b, 1); $('wish').value = '';
   litTs.a = litTs.b = 0;
-  if (me) (async () => { try { await sendLit('a', 0); await sendLit('b', 0); } catch (err) {} })();
+  if (together) (async () => { try { await sendLit('a', 0); await sendLit('b', 0); } catch (err) {} })();
+  me = null; kA.classList.remove('theirs'); kB.classList.remove('theirs');
   step = 1; setHint(); $('hint').classList.add('on');
 };
 
