@@ -598,14 +598,23 @@ function startTogether(side){
   setHint();
   let opened = false;
   const giveUp = setTimeout(() => { if (!opened) solo('เชื่อมต่อไม่ได้ตอนนี้ จุดเองทั้งสองใบไปก่อนนะ'); }, 10000);
-  try { es = new EventSource(SYNC_URL + '/sse?since=2h'); } catch (e) { clearTimeout(giveUp); solo('เชื่อมต่อไม่ได้ตอนนี้ จุดเองทั้งสองใบไปก่อนนะ'); return; }
-  es.onopen = () => { opened = true; clearTimeout(giveUp); };
-  es.onmessage = ev => {
+  const take = raw => {
     try {
-      const m = JSON.parse(JSON.parse(ev.data).message || '{}');
-      if ((m.s === 'a' || m.s === 'b') && typeof m.t === 'number'){ litTs[m.s] = m.t; syncLit(); }
+      const m = JSON.parse(raw.message || '{}');
+      if ((m.s === 'a' || m.s === 'b') && typeof m.t === 'number'){ litTs[m.s] = m.t; return true; }
     } catch (e) {}
+    return false;
   };
+  /* อ่านสถานะย้อนหลังเงียบๆ ก่อน แล้วค่อยฟังของใหม่แบบสด */
+  fetch(SYNC_URL + '/json?poll=1&since=2h').then(r => r.text()).then(txt => {
+    let last = '';
+    txt.split('\n').forEach(line => { try { const ev = JSON.parse(line); if (ev.event === 'message'){ take(ev); last = ev.id; } } catch (e) {} });
+    syncLit(true);
+    if (!me) return;
+    es = new EventSource(SYNC_URL + '/sse' + (last ? '?since=' + encodeURIComponent(last) : ''));
+    es.onopen = () => { opened = true; clearTimeout(giveUp); };
+    es.onmessage = ev => { try { if (take(JSON.parse(ev.data))) syncLit(); } catch (e) {} };
+  }).catch(() => { clearTimeout(giveUp); solo('เชื่อมต่อไม่ได้ตอนนี้ จุดเองทั้งสองใบไปก่อนนะ'); });
 }
 function solo(msg){
   if (!me) return;
@@ -615,12 +624,12 @@ function solo(msg){
 }
 const who = location.hash.replace('#', '').toLowerCase();
 if (who !== 'solo') startTogether(who === 'ka' ? 'a' : 'b');
-function syncLit(){
+function syncLit(quiet){
   if (!me) return;
   ['a', 'b'].forEach(s => {
     const el = K[s].el, on = isLit(s), has = el.classList.contains('lit');
     if (step > 1) return;
-    if (on && !has){ lightFx(K[s]); if (s !== me) toast(s === 'a' ? 'เค้าจุดเทียนแล้ว!' : 'เบ้บจุดเทียนแล้ว!'); }
+    if (on && !has){ lightFx(K[s]); if (s !== me && !quiet) toast(s === 'a' ? 'เค้าจุดเทียนแล้ว!' : 'เบ้บจุดเทียนแล้ว!'); }
     else if (!on && has) el.classList.remove('lit');
   });
   setHint(); checkBoth();
